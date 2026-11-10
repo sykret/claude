@@ -1,0 +1,4 @@
+# 분석 대상 바이너리와 디컴파일 원본은 커밋하지 않는다 (라이선스/재배포 문제)
+inbox/*
+!inbox/.gitkeep
+evidence/raw/
