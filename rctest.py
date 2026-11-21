@@ -19,7 +19,7 @@ bpf.add_vsource('V1', 'in', bpf.gnd, dc_value=1, ac_value=1)
 fspice = sys.argv[1]
 parsed = netlist_parser.parse_circuit(fspice)
 cir = parsed[0]
-cir.add_vsource('V1', 'in', cir.gnd , dc_value=1, ac_value=1)
+cir.add_vsource('V1', 'n1', cir.gnd , dc_value=1, ac_value=1)
 out = 'n8'
 
 pza = ahkab.new_pz('V1', (out, cir.gnd), x0=None, shift=1e3)
