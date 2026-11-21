@@ -29,5 +29,4 @@ r = ahkab.run(cir, pza)['pz']
 
 print('Singularities:')
 for x, _ in r:
-    print "* %s = %+g %+gj Hz" % (x, np.real(r[x]), np.imag(r[x]))
-pdb.set_trace()
+    print("* %s = %+g %+gj Hz" % (x, np.real(r[x]), np.imag(r[x])))
