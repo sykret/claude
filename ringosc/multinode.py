@@ -22,7 +22,12 @@ import numpy as np
 from layout import TECHS, build_ro, extract
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LIB = os.path.abspath(os.path.join(HERE, "..", "pdk", "ptm", "ptm.lib"))
+PDK = os.path.abspath(os.path.join(HERE, "..", "pdk", "ptm"))
+LIB = os.path.join(PDK, "ptm.lib")
+LIB_MG = os.path.join(PDK, "ptmmg.lib")
+OSDI = os.path.join(PDK, "osdi", "bsimcmg.osdi")
+# ngspice with OSDI (needed for the BSIM-CMG FinFET models); override with $NGSPICE
+NGSPICE = os.environ.get("NGSPICE", "/opt/ngspice-osdi/bin/ngspice")
 OUT = os.path.join(HERE, "results_nodes")
 CONFIGS = ("intrinsic", "layout", "wire10", "wire100")
 
@@ -49,11 +54,18 @@ def netlist(tech, corner, config, mode, datafile, tstop=0.0):
     ro = build_ro(tech)
     lam = tech.lam
     bsim4 = tech.node != 180
-    L = [f"* RO21 {tech.node}nm {corner} {config} {mode}", f'.lib "{LIB}" {sec}',
+    L = [f"* RO21 {tech.label} {corner} {config} {mode}",
+         f'.lib "{LIB_MG if tech.finfet else LIB}" {sec}',
          f"VDD vdd 0 {vdd}",
          f"VEN en 0 PWL(0 0 20p {vdd})" if mode == "tran" else "VEN en 0 0"]
-    extra = " rbodymod=0" if (mode == "op" and bsim4) else ""
+    extra = " rbodymod=0" if (mode == "op" and bsim4 and not tech.finfet) else ""
     for k, d in ro.devices:
+        if tech.finfet:   # BSIM-CMG via OSDI: N prefix, fin count instead of width/areas
+            g = f"{d.g}_l" if d.g.startswith("n") else d.g
+            b = "0" if d.typ == "nch" else "vdd"
+            nf = tech.nfin[0] if d.typ == "nch" else tech.nfin[1]
+            L.append(f"N{d.name} {d.d} {g} {d.s} {b} {d.typ} L={tech.lg}n NFIN={nf}")
+            continue
         w = d.w * lam
         ad, as_ = w * d.ld * lam, w * d.ls * lam
         pd, ps = 2 * (w + d.ld * lam), 2 * (w + d.ls * lam)
@@ -81,18 +93,19 @@ def netlist(tech, corner, config, mode, datafile, tstop=0.0):
             L += pi_chain(f"w{k}", net, f"{net}_l", segs)
         else:
             L.append(f"Vw{k} {net} {net}_l 0")
+    pre = [f"pre_osdi {OSDI}"] if tech.finfet else []
     if mode == "tran":
-        L += [".options method=gear reltol=1e-4", ".control",
+        L += [".options method=gear reltol=1e-4", ".control"] + pre + [
               f"tran {tstop/20000:.4g} {tstop:.4g}", f"wrdata {datafile} v(n1) i(VDD)", ".endc", ".end"]
     else:
-        L += [".control", "op", f"print i(VDD) > {datafile}", ".endc", ".end"]
+        L += [".control"] + pre + ["op", f"print i(VDD) > {datafile}", ".endc", ".end"]
     return "\n".join(L) + "\n"
 
 
 def ngspice(text, d):
     p = os.path.join(d, "ro.sp")
     open(p, "w").write(text)
-    r = subprocess.run(["ngspice", "-b", p], cwd=d, capture_output=True, text=True,
+    r = subprocess.run([NGSPICE, "-b", p], cwd=d, capture_output=True, text=True,
                        env=dict(os.environ, OMP_NUM_THREADS="1"))
     if r.returncode != 0:
         raise RuntimeError(r.stdout[-1500:] + r.stderr[-1500:])
@@ -105,7 +118,7 @@ def simulate(tech, corner, config):
         ngspice(netlist(tech, corner, config, "op", f), d)
         p_leak = -float(open(f).read().split("=")[-1].split()[0]) * vdd
     # initial guess of the simulated time; extended automatically if too short
-    tstop = 1.5e-9 * (tech.node / 45) * (4 if corner == "lp" else 1)
+    tstop = 1.5e-9 * max(tech.node, 20) / 45 * (4 if corner in ("lp", "lstp") else 1)
     if config == "wire10":
         tstop *= 3
     if config == "wire100":
@@ -132,7 +145,7 @@ def simulate(tech, corner, config):
     fr = 1 / T
     ro = build_ro(tech)
     ex = extract(ro)
-    return dict(node=tech.node, corner=corner, config=config, vdd=vdd,
+    return dict(node=tech.node, finfet=int(tech.finfet), corner=corner, config=config, vdd=vdd,
                 freq_GHz=fr / 1e9, tstage_ps=T / 42 * 1e12,
                 P_total_uW=p_tot * 1e6, P_leak_uW=p_leak * 1e6,
                 leak_pct=p_leak / p_tot * 100,
@@ -144,18 +157,22 @@ def simulate(tech, corner, config):
                 periods=k)
 
 
-def run():
+def run(techs=TECHS, keep=()):
+    """Simulate `techs`; rows in `keep` (other nodes, already simulated) are kept in the CSV."""
     os.makedirs(OUT, exist_ok=True)
-    rows = []
-    for t in TECHS:
+    rows = list(keep)
+    for t in techs:
         for corner in t.corners:
             for cfg in CONFIGS:
                 r = simulate(t, corner, cfg)
                 rows.append(r)
-                print(f"{t.node:4d} {corner:4s} {cfg:9s} f={r['freq_GHz']:8.4f} GHz  P={r['P_total_uW']:8.2f} uW "
+                print(f"{t.label:11s} {corner:4s} {cfg:9s} f={r['freq_GHz']:8.4f} GHz  P={r['P_total_uW']:8.2f} uW "
                       f"E={r['E_cycle_fJ']:8.2f} fJ  leak={r['P_leak_uW']*1e3:9.2f} nW", flush=True)
+    fields = list(rows[-1].keys())
+    for r in rows:
+        r.setdefault("finfet", 0)
     with open(os.path.join(OUT, "nodes.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader(); w.writerows(rows)
     return rows
 
@@ -187,7 +204,7 @@ def plots(rows):
         return xs, ys
 
     hp = lambda t: "bulk" if "bulk" in t.corners else "hp"
-    lp = lambda t: "lp" if "lp" in t.corners else None
+    lp = lambda t: "lp" if "lp" in t.corners else ("lstp" if "lstp" in t.corners else None)
     sty = {"intrinsic": ("tab:gray", ":"), "layout": ("tab:blue", "-"),
            "wire10": ("tab:orange", "--"), "wire100": ("tab:red", "-.")}
 
@@ -248,6 +265,12 @@ def summary(rows):
 
 
 if __name__ == "__main__":
-    rows = load() if "--analyze-only" in sys.argv else run()
+    if "--analyze-only" in sys.argv:
+        rows = load()
+    elif "--fins-only" in sys.argv:          # keep existing bulk rows, (re)run the FinFET nodes
+        from layout import FINS
+        rows = run(FINS, keep=[r for r in load() if not r.get("finfet")])
+    else:
+        rows = run()
     plots(rows)
     summary(rows)

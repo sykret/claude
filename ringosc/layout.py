@@ -35,6 +35,7 @@ LAYERS = {  # name: (gds layer, colour, alpha, z-order)
     "metal1":  (7, "#1f77b4", 0.55, 4),
     "via1":    (8, "#555555", 1.00, 7),
     "metal2":  (9, "#ff9f1c", 0.55, 5),
+    "fin":     (10, "#6b4f1d", 0.85, 2),
 }
 
 
@@ -46,10 +47,26 @@ class Tech:
     ar: float                 # metal aspect ratio T/W
     k: float                  # effective dielectric constant
     rho: float                # effective Cu resistivity incl. size effect/barrier [ohm m]
+    finfet: bool = False
+    lg: float = 0.0           # FinFET gate length [nm] (card L)
+    mpitch: float = 0.0       # FinFET M1 pitch [nm]; lambda = mpitch/6
+    fpitch: float = 0.0       # fin pitch [nm] (card FPITCH)
+    tfin: float = 0.0         # fin width [nm]
+    nfin: tuple = (1, 1)      # fins per NMOS / PMOS (p-fin ~0.9x n-fin current -> balanced)
 
     @property
     def lam(self):            # lambda [m]
+        if self.finfet:
+            return self.mpitch * 1e-9 / 6
         return self.node * 1e-9 / 2
+
+    @property
+    def L(self):              # simulated gate length [m]
+        return (self.lg if self.finfet else self.node) * 1e-9
+
+    @property
+    def label(self):
+        return f"{self.node}nm" + (" FinFET" if self.finfet else "")
 
     def metal(self, name="M1"):
         w = 3 * self.lam
@@ -79,6 +96,19 @@ TECHS = [
     Tech(32,  {"hp": ("n32hp", 0.9), "lp": ("n32lp", 1.0)}, 1.9, 2.7, 4.3e-8),
     Tech(22,  {"hp": ("n22hp", 0.8), "lp": ("n22lp", 0.95)}, 2.0, 2.55, 5.5e-8),
 ]
+BULK = list(TECHS)
+
+# PTM-MG FinFET nodes. lambda = M1 pitch / 6 (metal pitch 6 lambda in the cell rules), so the
+# same cell topology lands near real FinFET cell sizes (7nm inverter ~ 0.11 x 0.25 um).
+# M1 pitches are typical foundry values; L, fin pitch and fin width come from the PTM-MG cards.
+FINS = [
+    Tech(20, {"hp": ("f20hp", 0.9),  "lstp": ("f20lstp", 0.9)},  2.0, 2.55, 5.2e-8, True, 24, 64, 60, 15),
+    Tech(16, {"hp": ("f16hp", 0.85), "lstp": ("f16lstp", 0.85)}, 2.0, 2.50, 5.8e-8, True, 20, 64, 42, 12),
+    Tech(14, {"hp": ("f14hp", 0.8),  "lstp": ("f14lstp", 0.8)},  2.0, 2.45, 6.3e-8, True, 18, 52, 32, 10),
+    Tech(10, {"hp": ("f10hp", 0.75), "lstp": ("f10lstp", 0.75)}, 2.0, 2.40, 7.2e-8, True, 14, 44, 28, 8),
+    Tech(7,  {"hp": ("f7hp", 0.7),   "lstp": ("f7lstp", 0.7)},   2.0, 2.35, 8.0e-8, True, 11, 40, 22, 6.5),
+]
+TECHS = BULK + FINS
 
 WN, WP = 4, 8           # device widths [lambda]
 INV_W, NAND_W, CELL_H = 16, 28, 38
@@ -227,6 +257,14 @@ def build_ro(tech, nstage=21):
             xn = x + cell.width + 3                    # next input pad left edge
             shapes.append(Shape("metal1", xo, 13, xn, 16, nets(k)))
         x += cell.width
+    if tech.finfet:   # draw fins across each active region at the card fin pitch
+        fp, tw = tech.fpitch * 1e-9 / tech.lam, tech.tfin * 1e-9 / tech.lam
+        for a in [q for q in shapes if q.layer == "active"]:
+            n = tech.nfin[0] if a.y0 < 15 else tech.nfin[1]
+            yc = (a.y0 + a.y1) / 2
+            for i in range(n):
+                y = yc + (i - (n - 1) / 2) * fp
+                shapes.append(Shape("fin", a.x0 - 1, y - tw / 2, a.x1 + 1, y + tw / 2))
     # feedback: last output (x_last+10..14) -> M2 track over the VDD rail -> NAND input pad
     xl = x - INV_W
     fb = nets(nstage - 1)
@@ -283,7 +321,7 @@ def extract(ro):
 def write_gds(ro, path):
     import gdstk
     lib = gdstk.Library(unit=1e-6, precision=1e-9)
-    top = lib.new_cell(f"RO{ro.nstage}_{ro.tech.node}nm")
+    top = lib.new_cell(f"RO{ro.nstage}_{ro.tech.node}nm" + ("_FINFET" if ro.tech.finfet else ""))
     s = ro.tech.lam * 1e6
     for sh in ro.shapes:
         top.add(gdstk.rectangle((sh.x0 * s, sh.y0 * s), (sh.x1 * s, sh.y1 * s),
@@ -340,7 +378,7 @@ def figures(outdir):
     cut = NAND_W + 4 * INV_W
     fig, ax = plt.subplots(figsize=(11, 6.2))
     y = 0.0
-    for t in TECHS:
+    for t in BULK:
         ro = build_ro(t)
         s = t.lam * 1e6
         sub = [Shape(q.layer, q.x0, q.y0 + y / s, min(q.x1, cut), q.y1 + y / s, q.net)
@@ -357,6 +395,36 @@ def figures(outdir):
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "scaling_same_scale.png"), dpi=160); plt.close(fig)
 
 
+def fin_figure(outdir):
+    """FinFET nodes at one scale + a 7nm inverter close-up showing the fins."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    cut = NAND_W + 4 * INV_W
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5.2), gridspec_kw={"width_ratios": [2.2, 1]})
+    y = 0.0
+    for t in FINS:
+        ro = build_ro(t)
+        s = t.lam * 1e6
+        sub = [Shape(q.layer, q.x0, q.y0 + y / s, min(q.x1, cut), q.y1 + y / s, q.net)
+               for q in ro.shapes if q.x0 < cut and not (q.layer == "metal2" and q.x1 > cut)]
+        draw(ax[0], sub, s)
+        ax[0].text(-0.02, y + CELL_H * s / 2, f"{t.node} nm", ha="right", va="center")
+        y += CELL_H * s + 0.06
+    ax[0].set_xlim(-0.2, cut * FINS[0].lam * 1e6 + 0.05); ax[0].set_ylim(-0.03, y)
+    ax[0].set_aspect("equal"); ax[0].set_yticks([]); ax[0].set_xlabel("x [um]")
+    ax[0].set_title("FinFET nodes, same scale (NAND2 + 4 INV)")
+    t = FINS[-1]
+    ro = build_ro(t)
+    s = t.lam * 1e9
+    x0 = NAND_W
+    draw(ax[1], [q for q in ro.shapes if x0 - 1 <= q.x0 < x0 + INV_W], s, x0=x0)
+    ax[1].set_xlim(-10, INV_W * s + 10); ax[1].set_ylim(-10, 42 * s); ax[1].set_aspect("equal")
+    ax[1].set_xlabel("x [nm]"); ax[1].set_ylabel("y [nm]")
+    ax[1].set_title(f"7nm inverter: L={t.lg:g} nm, fin pitch {t.fpitch:g} nm, NFIN n/p = {t.nfin[0]}/{t.nfin[1]}")
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "finfet_layout.png"), dpi=150); plt.close(fig)
+
+
 def main():
     outdir = os.path.join(HERE, "results_nodes", "layout")
     os.makedirs(outdir, exist_ok=True)
@@ -364,7 +432,7 @@ def main():
           f" {'n5 R[ohm]':>9} {'n5 C[fF]':>8} {'fb R[ohm]':>9} {'fb C[fF]':>8} {'fb M2[um]':>9}")
     for t in TECHS:
         ro = build_ro(t)
-        write_gds(ro, os.path.join(outdir, f"ro21_{t.node}nm.gds"))
+        write_gds(ro, os.path.join(outdir, f"ro21_{t.node}nm{'_finfet' if t.finfet else ''}.gds"))
         ex = extract(ro)
         m1 = t.metal()
         a, b = ex["n5"], ex[f"n{ro.nstage - 1}"]
@@ -373,6 +441,7 @@ def main():
               f"{m1.r()*1e-6:12.2f} {m1.c_total()*1e9:11.4f} {a['R']:9.1f} {a['C']*1e15:8.3f} "
               f"{b['R']:9.1f} {b['C']*1e15:8.3f} {b['len_um'].get('metal2', 0):9.2f}")
     figures(outdir)
+    fin_figure(outdir)
 
 
 if __name__ == "__main__":

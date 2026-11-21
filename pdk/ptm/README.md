@@ -1,4 +1,4 @@
-# PTM bulk CMOS models for ngspice (180nm – 22nm)
+# PTM models for ngspice: bulk CMOS 180nm–22nm + FinFET 20nm–7nm
 
 The Predictive Technology Model (PTM) model cards are combined into one ngspice `.lib` file, `ptm.lib`. The device names are always `nch` / `pch`, and the drawn gate length L equals the node size. The `xl` term in each card corrects drawn L to the printed (physical) length.
 
@@ -34,7 +34,35 @@ M1 out in 0 0 nch W=130n L=65n
 | n22hp | 1202 | 94.3 | 904 | 114 |
 | n22lp | 420 | 0.04 | 271 | 0.03 |
 
+## FinFET: PTM-MG 20/16/14/10/7nm (`ptmmg.lib`, BSIM-CMG via OSDI)
+
+PTM-MG cards are BSIM-CMG models (HSPICE level 72, version 105.03). ngspice does not have BSIM-CMG built in, so it is loaded as an OSDI module:
+
+1. Compile the open BSIM-CMG 111.0.0 Verilog-A in `osdi/bsimcmg/` (ECL-2.0) with [OpenVAF-Reloaded](https://github.com/OpenVAF/OpenVAF-Reloaded):
+   `openvaf-r osdi/bsimcmg/bsimcmg.va -o osdi/bsimcmg.osdi`
+2. Use ngspice 45 built with OSDI enabled (`./configure --enable-osdi`). The ngspice-42 Ubuntu package does not support OSDI.
+3. `python3 tools/convert_ptmmg.py` converts `models/*fet_*.pm` into `ptmmg.lib`. Parameters missing from BSIM-CMG 111.0.0 are dropped (14 in total, e.g. lmin/lmax, version, capmod, coremod, vasat), and the full list is in the library header.
+
+```spice
+.lib "/path/to/pdk/ptm/ptmmg.lib" f7hp        $ f20hp f20lstp ... f7hp f7lstp
+N1 out in 0   0   nch L=11n NFIN=1            $ OSDI devices use the N prefix
+N2 out in vdd vdd pch L=11n NFIN=1
+.control
+pre_osdi /path/to/pdk/ptm/osdi/bsimcmg.osdi
+.endc
+```
+
+| Section | L [nm] | VDD [V] | Ion_n [uA/fin] | Ioff_n [nA/fin] | Ion_p [uA/fin] | Ioff_p [nA/fin] |
+|---|---|---|---|---|---|---|
+| f20hp / f20lstp | 24 | 0.90 | 127.5 / 77.8 | 4.42 / 0.004 | 112.8 / 71.0 | 4.85 / 0.005 |
+| f16hp / f16lstp | 20 | 0.85 | 136.9 / 79.1 | 3.90 / 0.004 | 119.6 / 71.6 | 4.15 / 0.005 |
+| f14hp / f14lstp | 18 | 0.80 | 141.6 / 76.5 | 3.32 / 0.003 | 132.0 / 73.0 | 3.57 / 0.004 |
+| f10hp / f10lstp | 14 | 0.75 | 131.7 / 65.8 | 3.34 / 0.003 | 122.1 / 61.3 | 3.70 / 0.004 |
+| f7hp / f7lstp   | 11 | 0.70 | 116.7 / 51.4 | 2.90 / 0.003 | 103.1 / 47.7 | 3.15 / 0.003 |
+
+(`tests/idvg_finfet.sh`, ngspice-45.2 + OSDI, |Vgs| = |Vds| = VDD)
+
 ## Notes
 - The 180nm card contains the HSPICE-only parameter `tref`. ngspice ignores it and prints a warning; its value equals `tnom` (27 C), so the results are unaffected.
-- **Not included: PTM-MG FinFET 20/16/14/10/7nm.** These models are BSIM-CMG (HSPICE level 72). ngspice has no built-in BSIM-CMG, so they need ngspice built with OSDI support plus `bsimcmg.osdi` compiled with OpenVAF.
+- The PTM-MG cards target BSIM-CMG 105.03 but are simulated here with the open 111.0.0 model, so results can differ slightly from PTM's published HSPICE values.
 - Source: https://mec.umn.edu/ptm (mirror: SJTU-YONGFU-RESEARCH-GRP/spice_model_collections).
