@@ -7,3 +7,5 @@ default:
 	echo "default"
 ptm45:
 	cd pdk/ptm45/tests && ngspice -b nmos_idvg.sp && ngspice -b inverter.sp
+ringosc:
+	cd ringosc && python3 ringosc.py

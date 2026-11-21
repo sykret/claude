@@ -1,0 +1,16 @@
+Mx wire: r = 3.592 ohm/um, c = 0.1797 fF/um (MCF=1)
+Ceff slope from P_dyn  = 0.1819 fF/um  (interconnect model 0.1797)
+delay slope (C-only) = 6.669 ps/fF  ->  Reff(driver, 0.69*R*C) = 9.67 kohm
+intrinsic stage delay (0 um) = 6.49 ps, f0 = 3.669 GHz
+wire-R penalty (RC - C only) vs Elmore 0.38*Rw*Cw:
+  Mx   20 um: sim    0.13 ps   Elmore    0.10 ps   ( 0.4% of stage delay)
+  Mx  100 um: sim    2.56 ps   Elmore    2.45 ps   ( 2.0% of stage delay)
+  Mx  200 um: sim    9.92 ps   Elmore    9.81 ps   ( 3.9% of stage delay)
+  Mx  500 um: sim   61.30 ps   Elmore   61.31 ps   ( 9.2% of stage delay)
+  Mg   20 um: sim    0.02 ps   Elmore    0.02 ps   ( 0.1% of stage delay)
+  Mg  100 um: sim    0.49 ps   Elmore    0.44 ps   ( 0.4% of stage delay)
+  Mg  200 um: sim    1.91 ps   Elmore    1.76 ps   ( 0.7% of stage delay)
+  Mg  500 um: sim   10.97 ps   Elmore   11.00 ps   ( 1.7% of stage delay)
+RO power theory P = V^2/(2*0.69*Reff) = 75.0 uW (sim 69..78 uW, ~independent of load)
+min EDP at 0 um: VDD = 0.8 V
+min EDP at 20 um: VDD = 0.8 V

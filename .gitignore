@@ -1,1 +1,2 @@
 pdk/ptm45/tests/*.txt
+__pycache__/
