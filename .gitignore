@@ -1,2 +1,3 @@
 pdk/ptm45/tests/*.txt
 __pycache__/
+*check.log

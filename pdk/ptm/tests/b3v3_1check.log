@@ -1,5 +1,0 @@
-BSIM3V3.1 Parameter Check
-Model = nch
-W = 3.6e-07, L = 1.8e-07
-Warning: Pd = 0 is less than W.
-Warning: Ps = 0 is less than W.
