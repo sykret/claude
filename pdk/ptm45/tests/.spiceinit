@@ -1,0 +1,2 @@
+* ngspice init (read from the current directory)
+set ngbehavior=hsa
