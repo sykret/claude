@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RC Playground</title>
+<style>
+  :root { --bg:#f7f6f2; --panel:#fff; --ink:#1d1d1b; --muted:#6b6a65; --line:#e3e1da; --accent:#d9480f; --accent2:#1864ab; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#151514; --panel:#1f1f1d; --ink:#ecebe6; --muted:#9a998f; --line:#33322e; --accent:#ff8a4c; --accent2:#74c0fc; } }
+  :root[data-theme="dark"] { --bg:#151514; --panel:#1f1f1d; --ink:#ecebe6; --muted:#9a998f; --line:#33322e; --accent:#ff8a4c; --accent2:#74c0fc; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:32px 16px 48px; }
+  h1 { font-size:28px; margin:0 0 4px; letter-spacing:-0.01em; }
+  p.sub { color:var(--muted); margin:0 0 24px; }
+  .grid { display:grid; grid-template-columns:280px 1fr; gap:16px; }
+  @media (max-width:720px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-top:14px; }
+  label:first-child { margin-top:0; }
+  .val { font:600 18px ui-monospace, monospace; color:var(--ink); }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .stat { display:flex; justify-content:space-between; border-top:1px solid var(--line); padding-top:10px; margin-top:14px; font-size:13px; color:var(--muted); }
+  .stat b { font:600 15px ui-monospace, monospace; color:var(--ink); }
+  canvas { width:100%; height:220px; display:block; }
+  h2 { font-size:14px; margin:0 0 8px; font-weight:600; }
+  .plots { display:grid; gap:16px; }
+  svg.schem { width:100%; height:90px; margin-top:12px; }
+  svg.schem * { stroke:var(--ink); fill:none; stroke-width:2; }
+  svg.schem text { stroke:none; fill:var(--muted); font:12px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>RC Playground</h1>
+  <p class="sub">A first-order RC low-pass filter. Move the sliders to see the cutoff frequency, Bode plot and step response change.</p>
+  <div class="grid">
+    <div class="card">
+      <label>Resistance R<br><span class="val" id="rv"></span>
+        <input id="r" type="range" min="0" max="6" step="0.01" value="3"></label>
+      <label>Capacitance C<br><span class="val" id="cv"></span>
+        <input id="c" type="range" min="-13" max="-5" step="0.01" value="-12.3"></label>
+      <div class="stat"><span>τ = RC</span><b id="tau"></b></div>
+      <div class="stat"><span>f<sub>c</sub> = 1/(2πRC)</span><b id="fc"></b></div>
+      <svg class="schem" viewBox="0 0 260 90" aria-label="RC low-pass schematic">
+        <path d="M10 25 H60 l5 -8 l10 16 l10 -16 l10 16 l10 -16 l10 16 l5 -8 H180 M180 25 V40 M165 40 H195 M165 50 H195 M180 50 V75 H10 M180 25 H250 M180 75 H250"/>
+        <text x="80" y="12">R</text><text x="200" y="50">C</text>
+        <text x="4" y="88">in</text><text x="232" y="88">out</text>
+      </svg>
+    </div>
+    <div class="plots">
+      <div class="card"><h2>Magnitude response |H(f)| (dB)</h2><canvas id="bode"></canvas></div>
+      <div class="card"><h2>Step response v<sub>out</sub>(t) / V<sub>in</sub></h2><canvas id="step"></canvas></div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const eng = (v, u) => {
+  const p = [[1e9,'G'],[1e6,'M'],[1e3,'k'],[1,''],[1e-3,'m'],[1e-6,'µ'],[1e-9,'n'],[1e-12,'p'],[1e-15,'f']];
+  for (const [s, n] of p) if (Math.abs(v) >= s * 0.9999) return (v / s).toPrecision(3) + ' ' + n + u;
+  return v.toExponential(2) + ' ' + u;
+};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function setup(cv) {
+  const d = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w * d; cv.height = h * d;
+  const g = cv.getContext('2d'); g.scale(d, d);
+  return { g, w, h };
+}
+
+function plot(cv, xs, ys, opt) {
+  const { g, w, h } = setup(cv);
+  const L = 48, R = 28, T = 10, B = 26, pw = w - L - R, ph = h - T - B;
+  const X = x => L + (x - opt.x0) / (opt.x1 - opt.x0) * pw;
+  const Y = y => T + (1 - (y - opt.y0) / (opt.y1 - opt.y0)) * ph;
+  g.font = '11px ui-monospace, monospace'; g.lineWidth = 1;
+  g.strokeStyle = css('--line'); g.fillStyle = css('--muted');
+  for (const t of opt.xt) { g.beginPath(); g.moveTo(X(t.v), T); g.lineTo(X(t.v), T + ph); g.stroke();
+    g.textAlign = 'center'; g.fillText(t.l, X(t.v), h - 8); }
+  for (const t of opt.yt) { g.beginPath(); g.moveTo(L, Y(t)); g.lineTo(L + pw, Y(t)); g.stroke();
+    g.textAlign = 'right'; g.fillText(t, L - 6, Y(t) + 4); }
+  if (opt.mark) { g.setLineDash([4, 4]); g.strokeStyle = css('--accent2');
+    g.beginPath(); g.moveTo(X(opt.mark.x), T); g.lineTo(X(opt.mark.x), T + ph); g.stroke(); g.setLineDash([]);
+    g.fillStyle = css('--accent2'); g.textAlign = 'left'; g.fillText(opt.mark.l, X(opt.mark.x) + 5, T + 12); }
+  g.strokeStyle = css('--accent'); g.lineWidth = 2.5; g.beginPath();
+  xs.forEach((x, i) => i ? g.lineTo(X(x), Y(ys[i])) : g.moveTo(X(x), Y(ys[i]))); g.stroke();
+}
+
+function update() {
+  const R = 10 ** +$('r').value, C = 10 ** +$('c').value, tau = R * C, fc = 1 / (2 * Math.PI * tau);
+  $('rv').textContent = eng(R, 'Ω'); $('cv').textContent = eng(C, 'F');
+  $('tau').textContent = eng(tau, 's'); $('fc').textContent = eng(fc, 'Hz');
+
+  // Bode: decades centred on fc
+  const lc = Math.log10(fc), x0 = Math.floor(lc) - 3, x1 = Math.floor(lc) + 4;
+  const xs = [], ys = [];
+  for (let i = 0; i <= 400; i++) { const lx = x0 + (x1 - x0) * i / 400, f = 10 ** lx;
+    xs.push(lx); ys.push(-10 * Math.log10(1 + (f / fc) ** 2)); }
+  const xt = []; for (let d = x0; d <= x1; d++) xt.push({ v: d, l: eng(10 ** d, 'Hz').replace(/\.0+ /, ' ') });
+  plot($('bode'), xs, ys, { x0, x1, y0: -80, y1: 5, xt, yt: [0, -20, -40, -60, -80], mark: { x: lc, l: '−3 dB @ ' + eng(fc, 'Hz') } });
+
+  // Step response over 6τ
+  const ts = [], vs = [];
+  for (let i = 0; i <= 300; i++) { const t = 6 * i / 300; ts.push(t); vs.push(1 - Math.exp(-t)); }
+  plot($('step'), ts, vs, { x0: 0, x1: 6, y0: 0, y1: 1.05, xt: [0,1,2,3,4,5,6].map(v => ({ v, l: v ? (v > 1 ? v : '') + 'τ' : '0' })),
+    yt: [0, 0.25, 0.5, 0.75, 1], mark: { x: 1, l: '63.2% @ τ = ' + eng(tau, 's') } });
+}
+$('r').oninput = $('c').oninput = update;
+addEventListener('resize', update);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', update);
+update();
+</script>
+</body>
+</html>
